@@ -14,9 +14,12 @@ func main() {
 
 	switch command := os.Args[1]; command {
 	case "init":
-    Init() 
+		Init()
 	case "cat-file":
 		CatFile(os.Args[3])
+	case "hash-object":
+		hash := HashObject(os.Args[3])
+		fmt.Print(hash)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command %s\n", command)
 		os.Exit(1)
