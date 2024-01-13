@@ -20,8 +20,11 @@ func main() {
 	case "hash-object":
 		hash := HashObject(os.Args[3])
 		fmt.Print(hash)
-  case "ls-tree":
-    ListTree(os.Args[3])
+	case "ls-tree":
+		ListTree(os.Args[3])
+	case "write-tree":
+		hash := WriteTree(".")
+		fmt.Println(hash)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command %s\n", command)

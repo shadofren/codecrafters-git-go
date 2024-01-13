@@ -17,25 +17,61 @@ type GitBlob struct {
 }
 
 type TreeEntry struct {
-  Perm []byte
-  Name []byte
-  Hash [20]byte
+	Perm []byte
+	Name []byte
+	Hash [20]byte
 }
+
+var filePerm = []byte{'1', '0', '0', '6', '4', '4'}
+var dirPerm = []byte{'4', '0', '0', '0', '0'}
+
+func NewTreeEntry(filename string) *TreeEntry {
+	objectHash := HashObject(filename)
+	hashBytes, err := hex.DecodeString(objectHash)
+	must(err)
+	var hash [20]byte
+	copy(hash[:], hashBytes)
+	baseName := filepath.Base(filename)
+	return &TreeEntry{Perm: filePerm, Name: []byte(baseName), Hash: hash}
+}
+
 type GitTree struct {
 	Entry []*TreeEntry
 }
 
 func (e *TreeEntry) Serialize() []byte {
-  content := e.Perm[:]
-  content = append(content, 0x20)
-  content = append(content, e.Name...)
+	content := e.Perm[:]
+	content = append(content, 0x20)
+	content = append(content, e.Name...)
 	content = append(content, 0x00)
-	content = append(content, []byte(hex.EncodeToString(e.Hash[:]))...)
-  return content
+	content = append(content, e.Hash[:]...)
+	return content
 }
 
-func (t *GitTree) Serialize() string {
-  return "" 
+func (t *GitTree) Serialize() (string, []byte) {
+	content := []byte("tree ")
+	entries := []byte{}
+	for _, entry := range t.Entry {
+		entries = append(entries, entry.Serialize()...)
+	}
+	content = append(content, []byte(strconv.Itoa((len(entries))))...)
+	content = append(content, 0x00)
+	content = append(content, entries...)
+	/* fmt.Println("print tree") */
+	/* printBytesInHex(content) */
+	hash, err := calcSHA1(content)
+	must(err)
+	compressed, err := compressZlib(bytes.NewBuffer(content))
+	must(err)
+	compressedBytes := compressed.Bytes()
+	return hash, compressedBytes
+}
+
+func printBytesInHex(data []byte) {
+	for _, b := range data {
+		fmt.Printf("%02x ", b)
+	}
+	fmt.Println() // Add a newline after printing the bytes
 }
 
 func (o *GitBlob) Serialize() (string, []byte) {
@@ -76,7 +112,7 @@ func CatFile(objectSha string) {
 	must(err)
 	header, content := Cut(dataBytes, 0x00)
 	objectType, _ := Cut(header, 0x20)
-  _ = objectType
+	_ = objectType
 	blob := &GitBlob{Content: content}
 	fmt.Print(string(blob.Content))
 }
@@ -91,10 +127,7 @@ func HashObject(filename string) string {
 	hash, data := blob.Serialize()
 
 	object := filepath.Join(".git/objects", hash[:2], hash[2:])
-	err = os.MkdirAll(filepath.Dir(object), 0755)
-	must(err)
-	err = os.WriteFile(object, data, 0644)
-	must(err)
+	writeFile(object, data)
 	return hash
 }
 
@@ -107,27 +140,66 @@ func ListTree(treeSha string) {
 	must(err)
 	header, content := Cut(dataBytes, 0x00)
 	treeType, _ := Cut(header, 0x20)
-  _ = treeType
+	_ = treeType
 	tree := &GitTree{Entry: make([]*TreeEntry, 0)}
-  reader := bytes.NewReader(content)
-  for {
-    var entry TreeEntry
-    entry.Perm, err = readUntil(reader, 0x20)
-    if err != nil {
-      if err == io.EOF {
-        break
-      }
-      must(err)
-    }
-    entry.Name, err = readUntil(reader, 0x00)
-    must(err)
-    reader.Read(entry.Hash[:])
-    // parse till space => perm
-    // parse till 0x00 => filename
-    // parse 20 byte => hash
-    fmt.Println(string(entry.Name))
-    tree.Entry = append(tree.Entry, &entry)
-  }
+	reader := bytes.NewReader(content)
+	for {
+		var entry TreeEntry
+		entry.Perm, err = readUntil(reader, 0x20)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			must(err)
+		}
+		entry.Name, err = readUntil(reader, 0x00)
+		must(err)
+		reader.Read(entry.Hash[:])
+		fmt.Println(string(entry.Name))
+		tree.Entry = append(tree.Entry, &entry)
+	}
+}
+
+func WriteTree(root string) string {
+	tree := &GitTree{make([]*TreeEntry, 0)}
+	_ = tree
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		fmt.Println(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() == ".git" {
+			continue
+		}
+		fullPath := filepath.Join(root, entry.Name())
+		if entry.IsDir() {
+			// recursively create the blob, skip for now
+			dirHash := WriteTree(fullPath)
+			hashBytes, err := hex.DecodeString(dirHash)
+			must(err)
+			var hash [20]byte
+			copy(hash[:], hashBytes)
+			dirEntry := &TreeEntry{Perm: dirPerm, Name: []byte(entry.Name()), Hash: hash}
+			tree.Entry = append(tree.Entry, dirEntry)
+		} else {
+			info, _ := entry.Info()
+			mode := fmt.Sprintf("100%03o", info.Mode().Perm()) // Get Unix permissions as octal string
+			treeEntry := NewTreeEntry(fullPath)
+			treeEntry.Perm = []byte(mode)
+			tree.Entry = append(tree.Entry, treeEntry)
+		}
+	}
+	hash, content := tree.Serialize()
+	outfile := filepath.Join(".git/objects", hash[:2], hash[2:])
+  writeFile(outfile, content)
+	return hash
+}
+
+func writeFile(filename string, data []byte) {
+  err := os.MkdirAll(filepath.Dir(filename), 0755)
+	must(err)
+	_ = os.WriteFile(filename, data, 0644)
 }
 
 func decompressZlib(input *bytes.Buffer) (*bytes.Buffer, error) {
@@ -188,15 +260,12 @@ func readUntil(reader *bytes.Reader, delim byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-
 		// Break the loop if the byte is 0x00
 		if b == delim {
 			break
 		}
-
 		// Append the byte to the result slice
 		result = append(result, b)
 	}
-
 	return result, nil
-} 
+}
