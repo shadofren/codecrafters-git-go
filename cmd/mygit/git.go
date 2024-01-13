@@ -12,14 +12,34 @@ import (
 	"strconv"
 )
 
-type GitObject struct {
-	Type    string
+type GitBlob struct {
 	Content []byte
 }
 
-func (o *GitObject) Serialize() (string, []byte) {
-	content := []byte(o.Type)
-	content = append(content, 0x20)
+type TreeEntry struct {
+  Perm []byte
+  Name []byte
+  Hash [20]byte
+}
+type GitTree struct {
+	Entry []*TreeEntry
+}
+
+func (e *TreeEntry) Serialize() []byte {
+  content := e.Perm[:]
+  content = append(content, 0x20)
+  content = append(content, e.Name...)
+	content = append(content, 0x00)
+	content = append(content, []byte(hex.EncodeToString(e.Hash[:]))...)
+  return content
+}
+
+func (t *GitTree) Serialize() string {
+  return "" 
+}
+
+func (o *GitBlob) Serialize() (string, []byte) {
+	content := []byte("blob ")
 	content = append(content, []byte(strconv.Itoa((len(o.Content))))...)
 	content = append(content, 0x00)
 	content = append(content, o.Content...)
@@ -56,7 +76,8 @@ func CatFile(objectSha string) {
 	must(err)
 	header, content := Cut(dataBytes, 0x00)
 	objectType, _ := Cut(header, 0x20)
-	blob := &GitObject{Type: string(objectType), Content: content}
+  _ = objectType
+	blob := &GitBlob{Content: content}
 	fmt.Print(string(blob.Content))
 }
 
@@ -66,7 +87,7 @@ func HashObject(filename string) string {
 
 	content, err := io.ReadAll(file)
 	must(err)
-	blob := &GitObject{Type: "blob", Content: content}
+	blob := &GitBlob{Content: content}
 	hash, data := blob.Serialize()
 
 	object := filepath.Join(".git/objects", hash[:2], hash[2:])
@@ -75,6 +96,38 @@ func HashObject(filename string) string {
 	err = os.WriteFile(object, data, 0644)
 	must(err)
 	return hash
+}
+
+func ListTree(treeSha string) {
+	filename := filepath.Join(".git/objects", treeSha[:2], treeSha[2:])
+	fileContent, err := os.ReadFile(filename)
+	must(err)
+	data, err := decompressZlib(bytes.NewBuffer(fileContent))
+	dataBytes := data.Bytes()
+	must(err)
+	header, content := Cut(dataBytes, 0x00)
+	treeType, _ := Cut(header, 0x20)
+  _ = treeType
+	tree := &GitTree{Entry: make([]*TreeEntry, 0)}
+  reader := bytes.NewReader(content)
+  for {
+    var entry TreeEntry
+    entry.Perm, err = readUntil(reader, 0x20)
+    if err != nil {
+      if err == io.EOF {
+        break
+      }
+      must(err)
+    }
+    entry.Name, err = readUntil(reader, 0x00)
+    must(err)
+    reader.Read(entry.Hash[:])
+    // parse till space => perm
+    // parse till 0x00 => filename
+    // parse 20 byte => hash
+    fmt.Println(string(entry.Name))
+    tree.Entry = append(tree.Entry, &entry)
+  }
 }
 
 func decompressZlib(input *bytes.Buffer) (*bytes.Buffer, error) {
@@ -126,3 +179,24 @@ func calcSHA1(data []byte) (string, error) {
 
 	return hashString, nil
 }
+
+func readUntil(reader *bytes.Reader, delim byte) ([]byte, error) {
+	var result []byte
+	for {
+		// Read a single byte from the reader
+		b, err := reader.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+
+		// Break the loop if the byte is 0x00
+		if b == delim {
+			break
+		}
+
+		// Append the byte to the result slice
+		result = append(result, b)
+	}
+
+	return result, nil
+} 
