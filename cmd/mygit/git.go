@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 )
 
 type GitBlob struct {
@@ -22,6 +23,7 @@ type TreeEntry struct {
 	Hash [20]byte
 }
 
+var author = "Manh Tu <xxlaguna93@gmail.com>"
 var filePerm = []byte{'1', '0', '0', '6', '4', '4'}
 var dirPerm = []byte{'4', '0', '0', '0', '0'}
 
@@ -59,6 +61,35 @@ func (t *GitTree) Serialize() (string, []byte) {
 	content = append(content, entries...)
 	/* fmt.Println("print tree") */
 	/* printBytesInHex(content) */
+	hash, err := calcSHA1(content)
+	must(err)
+	compressed, err := compressZlib(bytes.NewBuffer(content))
+	must(err)
+	compressedBytes := compressed.Bytes()
+	return hash, compressedBytes
+}
+
+type GitCommit struct {
+	Tree    string
+	Parent  string
+	Author  string
+	Email   string
+	Time    time.Time
+	Message string
+}
+
+func (c *GitCommit) Serialize() (string, []byte) {
+  timeFormat := c.Time.Unix()
+  location, _ := c.Time.Zone()
+	fileContent := fmt.Sprintf("tree %s\nparent %s\nauthor %s %s %d %s00\ncommitter %s %s %d %s00\n\n%s\n",
+		c.Tree, c.Parent,
+		c.Author, c.Email, timeFormat, location, 
+		c.Author, c.Email, timeFormat, location, 
+		c.Message)
+	content := []byte("commit ")
+	content = append(content, []byte(strconv.Itoa((len(fileContent))))...)
+	content = append(content, 0x00)
+	content = append(content, []byte(fileContent)...)
 	hash, err := calcSHA1(content)
 	must(err)
 	compressed, err := compressZlib(bytes.NewBuffer(content))
@@ -192,12 +223,29 @@ func WriteTree(root string) string {
 	}
 	hash, content := tree.Serialize()
 	outfile := filepath.Join(".git/objects", hash[:2], hash[2:])
-  writeFile(outfile, content)
+	writeFile(outfile, content)
 	return hash
 }
 
+func CommitTree(treeSha, parentSha, message string) {
+	commit := &GitCommit{
+		Tree:    treeSha,
+		Parent:  parentSha,
+		Author:  "Manh Tu",
+		Email:   "xxlaguna93@gmail.com",
+		Time:    time.Now(),
+		Message: message,
+	}
+
+	hash, content := commit.Serialize()
+	outfile := filepath.Join(".git/objects", hash[:2], hash[2:])
+	writeFile(outfile, content)
+
+	fmt.Println(hash)
+}
+
 func writeFile(filename string, data []byte) {
-  err := os.MkdirAll(filepath.Dir(filename), 0755)
+	err := os.MkdirAll(filepath.Dir(filename), 0755)
 	must(err)
 	_ = os.WriteFile(filename, data, 0644)
 }

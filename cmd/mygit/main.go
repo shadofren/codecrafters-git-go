@@ -25,6 +25,9 @@ func main() {
 	case "write-tree":
 		hash := WriteTree(".")
 		fmt.Println(hash)
+  case "commit-tree":
+    treeSha, parentSha, message := os.Args[2], os.Args[4], os.Args[6]
+    CommitTree(treeSha, parentSha, message)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command %s\n", command)
