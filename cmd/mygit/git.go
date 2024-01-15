@@ -729,7 +729,7 @@ func writeGitObject(repoPath string, object []byte) (string, error) {
 	blobSha := fmt.Sprintf("%x", sha1.Sum(object))
 	// log.Printf("[Debug] object sha: %s\n", blobSha)
 
-  objectFilePath := objectPath(blobSha)
+	objectFilePath := filepath.Join(repoPath, ".git", "objects", blobSha[:2], blobSha[2:])
 	// log.Printf("[Debug] object file path: %s\n", objectFilePath)
 	if err := os.MkdirAll(filepath.Dir(objectFilePath), 0755); err != nil {
 		return "", err
