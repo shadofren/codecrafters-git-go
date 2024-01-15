@@ -16,7 +16,8 @@ func main() {
 	case "init":
 		Init(".")
 	case "cat-file":
-		CatFile(os.Args[3])
+    content, _ := CatFile(".", os.Args[3])
+    fmt.Print(string(content))
 	case "hash-object":
 		hash := HashObject(os.Args[3])
 		fmt.Print(hash)
@@ -24,7 +25,7 @@ func main() {
 		ListTree(os.Args[3])
 	case "write-tree":
 		hash := WriteTree(".")
-		fmt.Println(hash)
+		fmt.Print(hash)
   case "commit-tree":
     treeSha, parentSha, message := os.Args[2], os.Args[4], os.Args[6]
     CommitTree(treeSha, parentSha, message)

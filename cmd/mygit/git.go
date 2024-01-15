@@ -36,16 +36,14 @@ const (
 
 var shaToObj map[string]Object = make(map[string]Object)
 
-type GitObjectReader struct {
-	objectFileReader *bufio.Reader
-	ContentSize      int64
-	Type             string // "tree", "commit", "blob"
-	Sha              string
-}
-
+// Plain object for cloning purpose
 type Object struct {
 	Type byte // object type.
 	Buf  []byte
+}
+
+type GitObject interface {
+	Serialize() (string, []byte)
 }
 
 type GitBlob struct {
@@ -175,19 +173,19 @@ func Init(root string) {
 	fmt.Println("Initialized git directory")
 }
 
-func CatFile(objectSha string) {
+func CatFile(localDir, objectSha string) ([]byte, error) {
 
-	filename := filepath.Join(".git/objects", objectSha[:2], objectSha[2:])
+	filename := filepath.Join(localDir, objectPath(objectSha))
 	fileContent, err := os.ReadFile(filename)
 	must(err)
 	data, err := decompressZlib(bytes.NewBuffer(fileContent))
 	dataBytes := data.Bytes()
 	must(err)
 	header, content := Cut(dataBytes, 0x00)
-	objectType, _ := Cut(header, 0x20)
-	_ = objectType
-	blob := &GitBlob{Content: content}
-	fmt.Print(string(blob.Content))
+	objectType, objectLen := Cut(header, 0x20)
+  _ = objectType
+  _ = objectLen
+  return content, nil
 }
 
 func HashObject(filename string) string {
@@ -695,6 +693,8 @@ func (o *Object) typeString() (string, error) {
 		return "tree", nil
 	case OBJECT_BLOB:
 		return "blob", nil
+	case OBJECT_TAG:
+		return "tag", nil
 	default:
 		return "", fmt.Errorf("invalid type: %d", o.Type)
 	}
@@ -725,12 +725,11 @@ func writeFetchedObjects(localRepo string) error {
 }
 
 // Write the git object and return the sha1.
-func writeGitObject(repoPath string, object []byte) (string, error) {
-	blobSha := fmt.Sprintf("%x", sha1.Sum(object))
+func writeGitObject(localDir string, content []byte) (string, error) {
+	blobSha := fmt.Sprintf("%x", sha1.Sum(content))
 	// log.Printf("[Debug] object sha: %s\n", blobSha)
 
-	objectFilePath := filepath.Join(repoPath, ".git", "objects", blobSha[:2], blobSha[2:])
-	// log.Printf("[Debug] object file path: %s\n", objectFilePath)
+	objectFilePath := filepath.Join(localDir, objectPath(blobSha))
 	if err := os.MkdirAll(filepath.Dir(objectFilePath), 0755); err != nil {
 		return "", err
 	}
@@ -739,7 +738,7 @@ func writeGitObject(repoPath string, object []byte) (string, error) {
 		return "", err
 	}
 	compresssedFileWriter := zlib.NewWriter(objectFile)
-	if _, err = compresssedFileWriter.Write(object); err != nil {
+	if _, err = compresssedFileWriter.Write(content); err != nil {
 		return "", err
 	}
 	if err := compresssedFileWriter.Close(); err != nil {
@@ -750,7 +749,7 @@ func writeGitObject(repoPath string, object []byte) (string, error) {
 
 func restoreRepository(repoPath, commitSha string) error {
 	// Parse commit and get tree sha.
-	commitBuf, err := readObjectContent(repoPath, commitSha)
+	commitBuf, err := CatFile(repoPath, commitSha)
 	if err != nil {
 		return err
 	}
@@ -762,7 +761,7 @@ func restoreRepository(repoPath, commitSha string) error {
 		return err
 	}
 	if treePrefix != "tree " {
-		return errors.New(fmt.Sprintf("Invalid commit blob: %s", string(commitBuf)))
+		return fmt.Errorf("invalid commit blob: %s", string(commitBuf))
 	}
 	treeSha, err := commitReader.ReadString('\n')
 	if err != nil {
@@ -776,65 +775,8 @@ func restoreRepository(repoPath, commitSha string) error {
 	return nil
 }
 
-func readObjectContent(repoPath, objSha string) ([]byte, error) {
-	objReader, err := NewGitObjectReader(repoPath, objSha)
-	if err != nil {
-		return []byte{}, err
-	}
-	contents, err := objReader.ReadContents()
-	if err != nil {
-		return []byte{}, err
-	}
-	return contents, nil
-}
-
-func NewGitObjectReader(repoPath, objectSha string) (GitObjectReader, error) {
-	objectFilePath := filepath.Join(repoPath, ".git", "objects", objectSha[:2], objectSha[2:])
-	objectFile, err := os.Open(objectFilePath)
-	if err != nil {
-		return GitObjectReader{}, err
-	}
-	objectFileDecompressed, err := zlib.NewReader(objectFile)
-	if err != nil {
-		return GitObjectReader{}, err
-	}
-	objectFileReader := bufio.NewReader(objectFileDecompressed)
-	// Read the object type (includes the space character after).
-	// e.g. tree for tree object.
-	objectType, err := objectFileReader.ReadString(' ')
-	if err != nil {
-		return GitObjectReader{}, err
-	}
-	objectType = objectType[:len(objectType)-1] // Remove the trailing space character
-	// Read the object size (includes the null byte after)
-	// e.g. 100 as the ascii string.
-	objectSizeStr, err := objectFileReader.ReadString(0)
-	if err != nil {
-		return GitObjectReader{}, err
-	}
-	objectSizeStr = objectSizeStr[:len(objectSizeStr)-1] // Remove the trailing null byte
-	size, err := strconv.ParseInt(objectSizeStr, 10, 64)
-	if err != nil {
-		return GitObjectReader{}, err
-	}
-	return GitObjectReader{
-		objectFileReader: objectFileReader,
-		Type:             objectType,
-		Sha:              objectSha,
-		ContentSize:      size,
-	}, nil
-}
-
-func (g *GitObjectReader) ReadContents() ([]byte, error) {
-	contents := make([]byte, g.ContentSize)
-	if _, err := io.ReadFull(g.objectFileReader, contents); err != nil {
-		return []byte{}, err
-	}
-	return contents, nil
-}
-
 func traverseTree(repoPath, curDir, treeSha string) error {
-	treeBuf, err := readObjectContent(repoPath, treeSha)
+	treeBuf, err := CatFile(repoPath, treeSha)
 	if err != nil {
 		return err
 	}
@@ -846,7 +788,7 @@ func traverseTree(repoPath, curDir, treeSha string) error {
 	for _, child := range tree.children {
 		if isBlob(child.mode) {
 			// Create a file
-			blobBuf, err := readObjectContent(repoPath, child.sha)
+			blobBuf, err := CatFile(repoPath, child.sha)
 			if err != nil {
 				return err
 			}
@@ -914,7 +856,7 @@ func isBlob(mode string) bool {
 
 func getPerm(mode string) (os.FileMode, error) {
 	if !isBlob(mode) {
-		return 0, errors.New(fmt.Sprintf("Invalid mode: %s", mode))
+		return 0, fmt.Errorf("invalid mode: %s", mode)
 	}
 	perm, err := strconv.ParseInt(mode[3:], 8, 64)
 	if err != nil {
