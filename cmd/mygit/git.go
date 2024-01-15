@@ -183,9 +183,9 @@ func CatFile(localDir, objectSha string) ([]byte, error) {
 	must(err)
 	header, content := Cut(dataBytes, 0x00)
 	objectType, objectLen := Cut(header, 0x20)
-  _ = objectType
-  _ = objectLen
-  return content, nil
+	_ = objectType
+	_ = objectLen
+	return content, nil
 }
 
 func HashObject(filename string) string {
@@ -202,8 +202,9 @@ func HashObject(filename string) string {
 	return hash
 }
 
-func ListTree(treeSha string) {
-	filename := filepath.Join(".git/objects", treeSha[:2], treeSha[2:])
+func ListTree(localDir, treeSha string, recurse bool) *GitTree {
+  _ = recurse
+	filename := filepath.Join(localDir, objectPath(treeSha))
 	fileContent, err := os.ReadFile(filename)
 	must(err)
 	data, err := decompressZlib(bytes.NewBuffer(fileContent))
@@ -226,9 +227,9 @@ func ListTree(treeSha string) {
 		entry.Name, err = readUntil(reader, 0x00)
 		must(err)
 		reader.Read(entry.Hash[:])
-		fmt.Println(string(entry.Name))
 		tree.Entry = append(tree.Entry, &entry)
 	}
+  return tree
 }
 
 func WriteTree(root string) string {
