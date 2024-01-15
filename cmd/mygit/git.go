@@ -139,13 +139,6 @@ func (c *GitCommit) Serialize() (string, []byte) {
 	return hash, compressedBytes
 }
 
-func printBytesInHex(data []byte) {
-	for _, b := range data {
-		fmt.Printf("%02x ", b)
-	}
-	fmt.Println() // Add a newline after printing the bytes
-}
-
 func (o *GitBlob) Serialize() (string, []byte) {
 	content := []byte("blob ")
 	content = append(content, []byte(strconv.Itoa((len(o.Content))))...)
@@ -202,8 +195,7 @@ func HashObject(filename string) string {
 	return hash
 }
 
-func ListTree(localDir, treeSha string, recurse bool) *GitTree {
-  _ = recurse
+func ListTree(localDir, treeSha string) *GitTree {
 	filename := filepath.Join(localDir, objectPath(treeSha))
 	fileContent, err := os.ReadFile(filename)
 	must(err)
@@ -229,7 +221,7 @@ func ListTree(localDir, treeSha string, recurse bool) *GitTree {
 		reader.Read(entry.Hash[:])
 		tree.Entry = append(tree.Entry, &entry)
 	}
-  return tree
+	return tree
 }
 
 func WriteTree(root string) string {
@@ -263,7 +255,7 @@ func WriteTree(root string) string {
 		}
 	}
 	hash, content := tree.Serialize()
-	outfile := filepath.Join(".git/objects", hash[:2], hash[2:])
+	outfile := objectPath(hash)
 	writeFile(outfile, content)
 	return hash
 }
@@ -279,7 +271,7 @@ func CommitTree(treeSha, parentSha, message string) {
 	}
 
 	hash, content := commit.Serialize()
-	outfile := filepath.Join(".git/objects", hash[:2], hash[2:])
+	outfile := objectPath(hash)
 	writeFile(outfile, content)
 
 	fmt.Println(hash)
@@ -300,7 +292,7 @@ func Clone(repo, localDir string) {
 
 	err = writeFetchedObjects(localDir)
 	must(err)
-	// Restore files committed at the commit sha.
+
 	err = restoreRepository(localDir, commitSha)
 	must(err)
 }
@@ -755,7 +747,6 @@ func restoreRepository(repoPath, commitSha string) error {
 		return err
 	}
 	log.Printf("[Debug] latest commit sha: %s\n", commitSha)
-	log.Printf("[Debug] latest commit buf: %s\n", string(commitBuf))
 	commitReader := bufio.NewReader(bytes.NewReader(commitBuf))
 	treePrefix, err := commitReader.ReadString(' ')
 	if err != nil {
@@ -777,38 +768,21 @@ func restoreRepository(repoPath, commitSha string) error {
 }
 
 func traverseTree(repoPath, curDir, treeSha string) error {
-	treeBuf, err := CatFile(repoPath, treeSha)
-	if err != nil {
-		return err
-	}
-	tree, err := parseTree(treeBuf)
-	if err != nil {
-		return err
-	}
-	log.Printf("[Debug] tree: %+v\n", tree)
-	for _, child := range tree.children {
-		if isBlob(child.mode) {
+	tree := ListTree(repoPath, treeSha)
+	for _, child := range tree.Entry {
+		sha := hex.EncodeToString(child.Hash[:])
+		if isBlob(child.Perm) {
 			// Create a file
-			blobBuf, err := CatFile(repoPath, child.sha)
+			blobBuf, err := CatFile(repoPath, sha)
 			if err != nil {
 				return err
 			}
-			filePath := filepath.Join(repoPath, curDir, child.name)
-			log.Printf("[Debug] write file: %s\n", filePath)
-			if err := os.MkdirAll(filepath.Dir(filePath), 0750); err != nil && !os.IsExist(err) {
-				return err
-			}
-			perm, err := getPerm(child.mode)
-			if err != nil {
-				return err
-			}
-			if err := os.WriteFile(filePath, blobBuf, perm); err != nil {
-				return err
-			}
+			filename := filepath.Join(repoPath, curDir, string(child.Name))
+			writeFile(filename, blobBuf)
 		} else {
 			// traverse recursively.
-			childDir := filepath.Join(curDir, child.name)
-			if err := traverseTree(repoPath, childDir, child.sha); err != nil {
+			childDir := filepath.Join(curDir, string(child.Name))
+			if err := traverseTree(repoPath, childDir, sha); err != nil {
 				return err
 			}
 		}
@@ -816,52 +790,6 @@ func traverseTree(repoPath, curDir, treeSha string) error {
 	return nil
 }
 
-func parseTree(treeBuf []byte) (*Tree, error) {
-	children := make([]TreeChild, 0)
-	contentsReader := bufio.NewReader(bytes.NewReader(treeBuf))
-	for {
-		// Read the mode of the entry (including the space character after)
-		mode, err := contentsReader.ReadString(' ')
-		if err == io.EOF {
-			break // We've reached the end of the file
-		} else if err != nil {
-			return nil, err
-		}
-		mode = mode[:len(mode)-1] // Trim the space suffix.
-		// Read the name of the entry (including the null-byte character after)
-		entryName, err := contentsReader.ReadString(0)
-		if err != nil {
-			return nil, err
-		}
-		entryName = entryName[:len(entryName)-1] // Trim the null-byte character suffix.
-		sha := make([]byte, 20)
-		_, err = contentsReader.Read(sha)
-		if err != nil {
-			return nil, err
-		}
-		children = append(children, TreeChild{
-			name: entryName,
-			mode: mode,
-			sha:  fmt.Sprintf("%x", sha),
-		})
-	}
-	tree := Tree{
-		children: children,
-	}
-	return &tree, nil
-}
-
-func isBlob(mode string) bool {
-	return strings.HasPrefix(mode, "100")
-}
-
-func getPerm(mode string) (os.FileMode, error) {
-	if !isBlob(mode) {
-		return 0, fmt.Errorf("invalid mode: %s", mode)
-	}
-	perm, err := strconv.ParseInt(mode[3:], 8, 64)
-	if err != nil {
-		return 0, err
-	}
-	return os.FileMode(perm), nil
+func isBlob(perm []byte) bool {
+	return strings.HasPrefix(string(perm), "100")
 }

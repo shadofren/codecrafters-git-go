@@ -22,7 +22,7 @@ func main() {
 		hash := HashObject(os.Args[3])
 		fmt.Print(hash)
 	case "ls-tree":
-		tree := ListTree(".", os.Args[3], false) // no recursion
+		tree := ListTree(".", os.Args[3]) // no recursion
 		for _, entry := range tree.Entry {
 			fmt.Println(string(entry.Name))
 		}
