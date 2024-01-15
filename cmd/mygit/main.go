@@ -31,7 +31,8 @@ func main() {
 		fmt.Print(hash)
 	case "commit-tree":
 		treeSha, parentSha, message := os.Args[2], os.Args[4], os.Args[6]
-		CommitTree(treeSha, parentSha, message)
+		hash := CommitTree(treeSha, parentSha, message)
+		fmt.Println(hash)
 	case "clone":
 		repo, localDir := os.Args[2], os.Args[3]
 		Clone(repo, localDir)

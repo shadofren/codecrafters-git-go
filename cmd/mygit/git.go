@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"compress/zlib"
 	"crypto/sha1"
@@ -43,7 +42,7 @@ type Object struct {
 }
 
 type GitObject interface {
-	Serialize() (string, []byte)
+	Serialize() []byte
 }
 
 type GitBlob struct {
@@ -51,9 +50,10 @@ type GitBlob struct {
 }
 
 type TreeEntry struct {
-	Perm []byte
-	Name []byte
-	Hash [20]byte
+	Perm   []byte
+	Name   []byte
+	Hash   [20]byte
+	IsBlob bool
 }
 
 var author = "Manh Tu <xxlaguna93@gmail.com>"
@@ -67,7 +67,7 @@ func NewTreeEntry(filename string) *TreeEntry {
 	var hash [20]byte
 	copy(hash[:], hashBytes)
 	baseName := filepath.Base(filename)
-	return &TreeEntry{Perm: filePerm, Name: []byte(baseName), Hash: hash}
+	return &TreeEntry{Perm: filePerm, Name: []byte(baseName), Hash: hash, IsBlob: true}
 }
 
 type GitTree struct {
@@ -83,7 +83,7 @@ func (e *TreeEntry) Serialize() []byte {
 	return content
 }
 
-func (t *GitTree) Serialize() (string, []byte) {
+func (t *GitTree) Serialize() []byte {
 	content := []byte("tree ")
 	entries := []byte{}
 	for _, entry := range t.Entry {
@@ -92,12 +92,7 @@ func (t *GitTree) Serialize() (string, []byte) {
 	content = append(content, []byte(strconv.Itoa((len(entries))))...)
 	content = append(content, 0x00)
 	content = append(content, entries...)
-	hash, err := calcSHA1(content)
-	must(err)
-	compressed, err := compressZlib(bytes.NewBuffer(content))
-	must(err)
-	compressedBytes := compressed.Bytes()
-	return hash, compressedBytes
+	return content
 }
 
 type GitCommit struct {
@@ -109,7 +104,7 @@ type GitCommit struct {
 	Message string
 }
 
-func (c *GitCommit) Serialize() (string, []byte) {
+func (c *GitCommit) Serialize() []byte {
 	timeFormat := c.Time.Unix()
 	location, _ := c.Time.Zone()
 	fileContent := fmt.Sprintf("tree %s\nparent %s\nauthor %s %s %d %s00\ncommitter %s %s %d %s00\n\n%s\n",
@@ -121,25 +116,20 @@ func (c *GitCommit) Serialize() (string, []byte) {
 	content = append(content, []byte(strconv.Itoa((len(fileContent))))...)
 	content = append(content, 0x00)
 	content = append(content, []byte(fileContent)...)
-	hash, err := calcSHA1(content)
-	must(err)
-	compressed, err := compressZlib(bytes.NewBuffer(content))
-	must(err)
-	compressedBytes := compressed.Bytes()
-	return hash, compressedBytes
+	return content
 }
 
-func (o *GitBlob) Serialize() (string, []byte) {
+func (o *GitBlob) Serialize() []byte {
 	content := []byte("blob ")
 	content = append(content, []byte(strconv.Itoa((len(o.Content))))...)
 	content = append(content, 0x00)
 	content = append(content, o.Content...)
-	hash, err := calcSHA1(content)
-	must(err)
-	compressed, err := compressZlib(bytes.NewBuffer(content))
-	must(err)
-	compressedBytes := compressed.Bytes()
-	return hash, compressedBytes
+	/* hash, err := calcSHA1(content) */
+	/* must(err) */
+	/* compressed, err := compressZlib(bytes.NewBuffer(content)) */
+	/* must(err) */
+	/* compressedBytes := compressed.Bytes() */
+	return content
 }
 
 func Init(root string) {
@@ -178,10 +168,8 @@ func HashObject(filename string) string {
 	content, err := io.ReadAll(file)
 	must(err)
 	blob := &GitBlob{Content: content}
-	hash, data := blob.Serialize()
-
-	object := filepath.Join(".git/objects", hash[:2], hash[2:])
-	writeFile(object, data)
+	hash, err := writeGitObject(".", blob.Serialize())
+	must(err)
 	return hash
 }
 
@@ -206,6 +194,7 @@ func ListTree(localDir, treeSha string) *GitTree {
 			}
 			must(err)
 		}
+		entry.IsBlob = len(entry.Perm) == 6 
 		entry.Name, err = readUntil(reader, 0x00)
 		must(err)
 		reader.Read(entry.Hash[:])
@@ -244,13 +233,12 @@ func WriteTree(root string) string {
 			tree.Entry = append(tree.Entry, treeEntry)
 		}
 	}
-	hash, content := tree.Serialize()
-	outfile := objectPath(hash)
-	writeFile(outfile, content)
+	hash, err := writeGitObject(".", tree.Serialize())
+	must(err)
 	return hash
 }
 
-func CommitTree(treeSha, parentSha, message string) {
+func CommitTree(treeSha, parentSha, message string) string {
 	commit := &GitCommit{
 		Tree:    treeSha,
 		Parent:  parentSha,
@@ -260,11 +248,9 @@ func CommitTree(treeSha, parentSha, message string) {
 		Message: message,
 	}
 
-	hash, content := commit.Serialize()
-	outfile := objectPath(hash)
-	writeFile(outfile, content)
-
-	fmt.Println(hash)
+	hash, err := writeGitObject(".", commit.Serialize())
+	must(err)
+	return hash
 }
 
 func Clone(repo, localDir string) {
@@ -376,8 +362,8 @@ func readObject(reader *bytes.Reader) error {
 			Buf:  decompressed.Bytes(),
 		}
 		if objLen != decompressed.Len() {
-		    fmt.Println("object doesn't match", objType, decompressed)
-		    fmt.Println("expected length", objLen, "actual", decompressed.Len())
+			fmt.Println("object doesn't match", objType, decompressed)
+			fmt.Println("expected length", objLen, "actual", decompressed.Len())
 		}
 		if err := saveObj(&obj); err != nil {
 			return err
@@ -582,10 +568,16 @@ func readPacketLine(reader *bytes.Reader) ([]byte, error) {
 	return data, err
 }
 
-func writeFile(filename string, data []byte) {
+func writeFile(filename string, data []byte) error {
 	err := os.MkdirAll(filepath.Dir(filename), 0755)
-	must(err)
-	_ = os.WriteFile(filename, data, 0644)
+	if err != nil {
+		return err
+	}
+	err = os.WriteFile(filename, data, 0644)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func decompressZlib(input *bytes.Buffer) (*bytes.Buffer, error) {
@@ -737,21 +729,22 @@ func restoreRepository(repoPath, commitSha string) error {
 		return err
 	}
 	log.Printf("[Debug] latest commit sha: %s\n", commitSha)
-	commitReader := bufio.NewReader(bytes.NewReader(commitBuf))
-	treePrefix, err := commitReader.ReadString(' ')
+	reader := bytes.NewReader(commitBuf)
+	treePrefix, err := readUntil(reader, ' ')
 	if err != nil {
+		fmt.Println(err)
 		return err
 	}
-	if treePrefix != "tree " {
+	if string(treePrefix) != "tree" {
 		return fmt.Errorf("invalid commit blob: %s", string(commitBuf))
 	}
-	treeSha, err := commitReader.ReadString('\n')
+	treeSha, err := readUntil(reader, '\n')
 	if err != nil {
 		return err
 	}
-	treeSha = treeSha[:len(treeSha)-1] // Strip newline.
 	// Traverse tree objects.
-	if err := restoreTree(repoPath, "", treeSha); err != nil {
+	if err := restoreTree(repoPath, "", string(treeSha)); err != nil {
+		fmt.Println(err)
 		return err
 	}
 	return nil
@@ -761,14 +754,13 @@ func restoreTree(repoPath, curDir, treeSha string) error {
 	tree := ListTree(repoPath, treeSha)
 	for _, child := range tree.Entry {
 		sha := hex.EncodeToString(child.Hash[:])
-		if isBlob(child.Perm) {
+		if child.IsBlob {
 			// Create a file
 			blobBuf, err := CatFile(repoPath, sha)
-			if err != nil {
-				return err
-			}
+			must(err)
 			filename := filepath.Join(repoPath, curDir, string(child.Name))
-			writeFile(filename, blobBuf)
+			err = writeFile(filename, blobBuf)
+			must(err)
 		} else {
 			// traverse recursively.
 			childDir := filepath.Join(curDir, string(child.Name))
@@ -778,8 +770,4 @@ func restoreTree(repoPath, curDir, treeSha string) error {
 		}
 	}
 	return nil
-}
-
-func isBlob(perm []byte) bool {
-	return strings.HasPrefix(string(perm), "100")
 }
