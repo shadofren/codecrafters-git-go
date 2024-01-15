@@ -14,7 +14,7 @@ func main() {
 
 	switch command := os.Args[1]; command {
 	case "init":
-		Init()
+		Init(".")
 	case "cat-file":
 		CatFile(os.Args[3])
 	case "hash-object":
@@ -28,6 +28,9 @@ func main() {
   case "commit-tree":
     treeSha, parentSha, message := os.Args[2], os.Args[4], os.Args[6]
     CommitTree(treeSha, parentSha, message)
+  case "clone":
+    repo, localDir := os.Args[2], os.Args[3]
+    Clone(repo, localDir)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command %s\n", command)
