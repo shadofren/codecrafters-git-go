@@ -56,16 +56,6 @@ type TreeEntry struct {
 	Hash [20]byte
 }
 
-type TreeChild struct {
-	mode string // 100XXX for blob, 40000 for tree.
-	name string
-	sha  string
-}
-
-type Tree struct {
-	children []TreeChild
-}
-
 var author = "Manh Tu <xxlaguna93@gmail.com>"
 var filePerm = []byte{'1', '0', '0', '6', '4', '4'}
 var dirPerm = []byte{'4', '0', '0', '0', '0'}
@@ -341,7 +331,7 @@ func objectPath(sha string) string {
 
 // Read objects from packfile.
 func readObject(reader *bytes.Reader) error {
-	objType, _, err := readObjectTypeAndLen(reader)
+	objType, objLen, err := readObjectTypeAndLen(reader)
 	if err != nil {
 		return err
 	}
@@ -385,10 +375,10 @@ func readObject(reader *bytes.Reader) error {
 			Type: objType,
 			Buf:  decompressed.Bytes(),
 		}
-		/* if objectLen != decompressed.Len() { */
-		/*     fmt.Println("object doesn't match", objType, decompressed) */
-		/*     fmt.Println("expected length", objectLen, "actual", decompressed.Len()) */
-		/* } */
+		if objLen != decompressed.Len() {
+		    fmt.Println("object doesn't match", objType, decompressed)
+		    fmt.Println("expected length", objLen, "actual", decompressed.Len())
+		}
 		if err := saveObj(&obj); err != nil {
 			return err
 		}
@@ -761,13 +751,13 @@ func restoreRepository(repoPath, commitSha string) error {
 	}
 	treeSha = treeSha[:len(treeSha)-1] // Strip newline.
 	// Traverse tree objects.
-	if err := traverseTree(repoPath, "", treeSha); err != nil {
+	if err := restoreTree(repoPath, "", treeSha); err != nil {
 		return err
 	}
 	return nil
 }
 
-func traverseTree(repoPath, curDir, treeSha string) error {
+func restoreTree(repoPath, curDir, treeSha string) error {
 	tree := ListTree(repoPath, treeSha)
 	for _, child := range tree.Entry {
 		sha := hex.EncodeToString(child.Hash[:])
@@ -782,7 +772,7 @@ func traverseTree(repoPath, curDir, treeSha string) error {
 		} else {
 			// traverse recursively.
 			childDir := filepath.Join(curDir, string(child.Name))
-			if err := traverseTree(repoPath, childDir, sha); err != nil {
+			if err := restoreTree(repoPath, childDir, sha); err != nil {
 				return err
 			}
 		}
